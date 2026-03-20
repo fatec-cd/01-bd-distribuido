@@ -18,6 +18,103 @@ Ao final deste laboratório, você será capaz de:
 - **Aplicar Fragmentação Híbrida**, combinando ambas as estratégias.
 - **Compreender os Casos de Uso** para replicação, sharding e fragmentação, e seus impactos em performance.
 
+## Revisão Teórica
+
+Antes de iniciar a parte prática, é fundamental compreender os conceitos teóricos que sustentam as técnicas de distribuição de dados exploradas neste laboratório.
+
+### Replicação de Dados
+
+A **replicação** consiste em manter **cópias idênticas** dos dados em dois ou mais nós de um sistema distribuído. A motivação principal é garantir **alta disponibilidade** e **escalabilidade de leitura**: se um nó falha, outro assume; se a carga de consultas cresce, mais réplicas podem ser adicionadas para distribuí-la.
+
+O modelo mais comum é o **primário–réplica** (*primary–replica*, também chamado de *master–slave*):
+
+| Papel | Responsabilidade |
+|-------|-----------------|
+| **Primário (Writer)** | Recebe **todas** as operações de escrita (`INSERT`, `UPDATE`, `DELETE`). É a fonte da verdade. |
+| **Réplica (Reader)** | Recebe uma cópia dos dados do primário por meio de replicação (síncrona ou assíncrona). Atende apenas operações de leitura (`SELECT`). |
+
+**Características importantes:**
+
+- **Replicação síncrona:** a escrita só é confirmada quando todas as réplicas recebem os dados. Garante consistência forte, mas com maior latência.
+- **Replicação assíncrona:** a escrita é confirmada assim que o primário registra a operação; as réplicas são atualizadas em segundo plano. Menor latência, porém existe uma janela de **eventual inconsistência** (latência de replicação).
+- A replicação **escala leituras**, mas **não escala escritas** — todas as gravações ainda passam por um único nó.
+
+### Fragmentação (Particionamento) de Dados
+
+A **fragmentação** (ou *particionamento*) consiste em **dividir** uma tabela em subconjuntos menores, chamados **fragmentos**, que podem ser armazenados em nós distintos. Diferente da replicação, cada nó contém apenas uma **parte** dos dados.
+
+Toda fragmentação deve obedecer a **três regras fundamentais**:
+
+| Regra | Definição |
+|-------|-----------|
+| **Completude** | A união de todos os fragmentos deve reconstituir a tabela original na íntegra — nenhum dado pode ser perdido. |
+| **Disjunção** | Não pode haver sobreposição — cada linha (ou coluna, conforme o tipo) pertence a **exatamente um** fragmento. |
+| **Reconstrução** | Deve ser possível recompor a tabela original a partir dos fragmentos, usando `UNION ALL` (horizontal) ou `JOIN` (vertical). |
+
+#### Fragmentação Horizontal
+
+Na fragmentação horizontal, a tabela é dividida por **linhas**. Cada fragmento possui o **mesmo esquema** (mesmas colunas), mas contém um **subconjunto dos registros**, selecionado por um critério como região geográfica, faixa de datas ou faixa de valores.
+
+```
+┌──────────────────────────┐
+│     TABELA ORIGINAL      │
+│  (todas as linhas)       │
+└────────┬─────────────────┘
+         │  critério: região
+    ┌────┼────────┐
+    ▼    ▼        ▼
+┌───────┐┌───────┐┌──────────┐
+│SUDESTE││  SUL  ││NORDESTE  │
+│(linhas││(linhas││(linhas   │
+│ SE)   ││ S)    ││ NE)      │
+└───────┘└───────┘└──────────┘
+```
+
+**Quando usar:** consultas que filtram por um atributo natural de partição (região, data), permitindo acessar apenas o fragmento relevante (*consulta local*).
+
+**Trade-off:** consultas que cruzam fragmentos (*consultas distribuídas*) ficam mais custosas, pois exigem comunicação entre nós e consolidação de resultados.
+
+#### Fragmentação Vertical
+
+Na fragmentação vertical, a tabela é dividida por **colunas**. Cada fragmento contém a **chave primária** (obrigatória para reconstrução) e um **subconjunto das colunas**, agrupadas por critérios como sensibilidade, frequência de acesso ou domínio funcional.
+
+```
+┌───────────────────────────────────┐
+│          TABELA ORIGINAL          │
+│ PK | nome | email | cpf | renda  │
+└────────┬──────────────────────────┘
+         │  critério: sensibilidade
+    ┌────┴────────────┐
+    ▼                 ▼
+┌──────────────┐ ┌───────────────┐
+│PERFIL PÚBLICO│ │DADOS SENSÍVEIS│
+│PK|nome|email │ │ PK|cpf|renda  │
+└──────────────┘ └───────────────┘
+```
+
+**Quando usar:**
+- **Proteção de dados (LGPD):** isolar dados pessoais sensíveis em um fragmento com controle de acesso restrito.
+- **Otimização de desempenho:** manter colunas acessadas com frequência ("quentes") separadas de colunas raramente consultadas ("frias"), aproveitando melhor o cache.
+
+**Trade-off:** consultas que necessitam de colunas presentes em fragmentos distintos exigem `JOIN`, aumentando o custo de processamento.
+
+#### Fragmentação Híbrida
+
+Na prática, as duas estratégias são **combinadas**. Primeiro aplica-se a fragmentação vertical (separando colunas por domínio) e depois a horizontal (dividindo cada fragmento vertical por região ou data) — ou vice-versa.
+
+### Replicação vs. Sharding
+
+| Aspecto | Replicação | Sharding |
+|---------|-----------|----------|
+| **Dados em cada nó** | Cópia completa (idêntica) | Subconjunto (fragmento) |
+| **Escala** | Leituras | Leituras **e** escritas |
+| **Consistência** | Alta (um primário) | Mais complexa (coordenação entre shards) |
+| **Caso de uso** | Leitura >> Escrita (ex.: catálogo de produtos) | Volume ou escrita excedem capacidade de um servidor |
+
+> **Neste laboratório**, utilizaremos um cluster Aurora MySQL com replicação primário–réplica para observar a replicação em funcionamento e **simularemos** a fragmentação criando tabelas separadas que representam os fragmentos.
+
+---
+
 ## Contexto do Cenário
 
 Uma empresa de e-commerce opera em 3 regiões do Brasil (**Sul**, **Sudeste**, **Nordeste**). O volume de dados cresceu e a empresa precisa:
@@ -84,6 +181,8 @@ Vamos criar **duas conexões simultâneas** no DBeaver, simulando uma aplicaçã
    - **Usuário / Senha:** conforme orientação do professor
 3. Teste a conexão e confirme que está funcionando.
 
+> **📸 Evidência 1:** Tire um *screenshot* mostrando a conexão `ECOMMERCE-WRITER` configurada e o teste de conexão bem-sucedido.
+
 ### Sessão B — Leitura (Reader)
 
 4. Crie uma **segunda** conexão MySQL:
@@ -92,6 +191,8 @@ Vamos criar **duas conexões simultâneas** no DBeaver, simulando uma aplicaçã
    - **Porta:** `3306`
    - **Usuário / Senha:** os mesmos da sessão A
 5. Teste a conexão e confirme que está funcionando.
+
+> **📸 Evidência 2:** Tire um *screenshot* mostrando a conexão `ECOMMERCE-READER` configurada e o teste de conexão bem-sucedido.
 
 > **Mantenha as duas janelas de conexão abertas, lado a lado.** Todas as operações de escrita (`CREATE`, `INSERT`, `ALTER`, `DROP`) serão executadas na **Sessão A (Writer)**. As operações de leitura e verificação serão executadas na **Sessão B (Reader)** para comprovar a replicação.
 
@@ -207,6 +308,8 @@ SELECT 'itens_pedido', COUNT(*) FROM itens_pedido;
 
 > **Resultado esperado:** 30 clientes, 20 produtos, 60 pedidos, 72 itens.
 
+> **📸 Evidência 3:** Tire um *screenshot* do resultado desta consulta na **Sessão A (Writer)**, mostrando a contagem das 4 tabelas.
+
 ### Tarefa 3.2 — Validação da Replicação (Sessão B — Reader)
 
 Agora execute **exatamente a mesma consulta** na **Sessão B (Reader)**:
@@ -224,6 +327,8 @@ SELECT 'itens_pedido', COUNT(*) FROM itens_pedido;
 ```
 
 > **Os resultados devem ser idênticos aos da Sessão A!** Isso comprova que a replicação está funcionando — os dados inseridos no Writer foram automaticamente copiados para o Reader.
+
+> **📸 Evidência 4:** Tire um *screenshot* do resultado desta consulta na **Sessão B (Reader)**, mostrando que as contagens são idênticas às da Sessão A.
 
 ### Tarefa 3.3 — Distribuição por região (Sessão B — Reader)
 
@@ -267,6 +372,8 @@ WHERE nome = 'Cliente Teste Replicação';
 ```
 
 > **Resultado:** É possível que a consulta não retorne nada no primeiro segundo. Execute-a novamente após 2-3 segundos. O novo registro aparecerá! Essa pequena demora é a **latência de replicação**.
+
+> **📸 Evidência 5:** Tire um *screenshot* mostrando o registro `Cliente Teste Replicação` aparecendo na **Sessão B (Reader)**. Se possível, posicione as duas sessões lado a lado para mostrar o dado no Writer e no Reader.
 
 ### Tarefa 3.5 — Remover o registro de teste (Sessão A — Writer)
 
@@ -349,6 +456,8 @@ SELECT 'pedidos_nordeste',   COUNT(*) FROM pedidos_nordeste;
 
 > **Confira:** A soma dos fragmentos deve ser igual ao total da tabela original.
 
+> **📸 Evidência 6:** Tire um *screenshot* mostrando a contagem dos fragmentos horizontais de **clientes** e de **pedidos** (ambas as consultas acima).
+
 ### Tarefa 4.4 — Verificar replicação dos fragmentos (Sessão B — Reader)
 
 Execute na **Sessão B (Reader)** para comprovar que as tabelas fragmentadas também foram replicadas:
@@ -362,6 +471,8 @@ SELECT 'clientes_nordeste',  COUNT(*) FROM clientes_nordeste;
 ```
 
 > **Os resultados devem ser idênticos aos da Sessão A!** Isso mostra que operações DDL (`CREATE TABLE`) e DML (`INSERT`) no Writer são replicadas automaticamente para o Reader.
+
+> **📸 Evidência 7:** Tire um *screenshot* do resultado na **Sessão B (Reader)** para comprovar a replicação das tabelas fragmentadas.
 
 ### Tarefa 4.5 — Verificar a regra de COMPLETUDE
 
@@ -387,6 +498,8 @@ INNER JOIN clientes_sul s2 ON s1.cliente_id = s2.cliente_id;
 ```
 
 > **Resultado esperado:** 0 (zero). Não pode haver sobreposição entre fragmentos.
+
+> **📸 Evidência 8:** Tire um *screenshot* mostrando os resultados das Tarefas 4.5 (completude) e 4.6 (disjunção) juntos.
 
 ### Tarefa 4.7 — Executar uma consulta LOCAL (rápida)
 
@@ -495,6 +608,8 @@ DESCRIBE clientes_endereco;
 
 > **Observe:** Todos os fragmentos contêm `cliente_id` (a chave primária). Isso é obrigatório para permitir a reconstrução.
 
+> **📸 Evidência 9:** Tire um *screenshot* mostrando a saída dos três `DESCRIBE`, evidenciando as colunas de cada fragmento vertical e a presença de `cliente_id` em todos.
+
 ### Tarefa 5.5 — Reconstruir a tabela original via JOIN
 
 ```sql
@@ -524,6 +639,8 @@ ORDER BY p.cliente_id;
 ```
 
 > **Verifique:** O resultado deve ser idêntico a `SELECT * FROM clientes ORDER BY cliente_id;`
+
+> **📸 Evidência 10:** Tire um *screenshot* mostrando (pelo menos as primeiras linhas de) o resultado da reconstrução via JOIN, comparando visualmente com a tabela original.
 
 ### Tarefa 5.6 — Consulta que usa SOMENTE o fragmento público (Sessão B — Reader)
 
@@ -587,6 +704,8 @@ UNION ALL
 SELECT 'perfil_publico_nordeste',  COUNT(*) FROM perfil_publico_nordeste;
 ```
 
+> **📸 Evidência 11:** Tire um *screenshot* mostrando a contagem dos fragmentos híbridos.
+
 ---
 
 ## Parte 7 — Fragmentação Horizontal por Faixa Temporal (Bônus)
@@ -619,11 +738,13 @@ SELECT 'pedidos_2025',    COUNT(*), MIN(data_pedido), MAX(data_pedido) FROM pedi
 
 > **Reflexão:** Se uma consulta precisa apenas de dados de 2025, ela acessaria apenas um fragmento em vez da tabela inteira.
 
+> **📸 Evidência 12:** Tire um *screenshot* mostrando os fragmentos temporais com suas contagens, datas de início e fim.
+
 ---
 
 ## Parte 8 — Questões para Discussão
 
-Depois de executar todos os comandos, discuta com seu grupo:
+Depois de executar todos os comandos, discuta com seu grupo e **registre suas respostas por escrito**:
 
 ### Questão 8.1
 
@@ -709,6 +830,8 @@ FROM (
 
 > **Ambas devem retornar o mesmo valor!** A diferença seria o custo de rede em um sistema distribuído real.
 
+> **📝 Evidência 13:** Registre por escrito as respostas das Questões 8.1 a 8.4, com suas próprias palavras. Inclua os *screenshots* dos resultados da Questão 8.4.
+
 ### Questão 8.5
 
 **Quando a replicação (ter cópias de leitura) é mais indicada que o sharding (dividir os dados entre vários bancos)?**
@@ -719,6 +842,8 @@ FROM (
 A **replicação** é mais indicada quando o sistema tem uma carga de leitura muito superior à escrita (ex.: catálogo de e-commerce com muitas consultas de produtos e poucos cadastros). Ela permite escalar as leituras adicionando mais réplicas. O **sharding** é mais adequado quando o volume total de dados ou a carga de escrita ultrapassa a capacidade de um único servidor — por exemplo, bilhões de registros de transações que precisam ser divididos por região ou faixa de valores.
 
 </details>
+
+> **📝 Evidência 14:** Registre por escrito as respostas das Questões 8.5 e 8.6, com suas próprias palavras.
 
 ### Questão 8.6
 
@@ -762,3 +887,36 @@ Não. Em um cluster **replicado** (como o que usamos), todas as operações DDL 
 | **Completude** | A união dos fragmentos reconstrói a tabela original. |
 | **Disjunção** | Não há sobreposição entre fragmentos. |
 | **LGPD** | Fragmentação vertical facilita isolamento e proteção de dados sensíveis. |
+
+---
+
+## Entregáveis
+
+Você deverá submeter **um único documento** (PDF ou DOCX) contendo **todas** as evidências coletadas ao longo deste laboratório. Organize o documento seguindo a estrutura abaixo.
+
+
+### Lista de Evidências
+
+| # | Evidência | Tipo | Parte |
+|---|-----------|------|-------|
+| 1 | Conexão `ECOMMERCE-WRITER` configurada e teste bem-sucedido | Screenshot | Parte 1 |
+| 2 | Conexão `ECOMMERCE-READER` configurada e teste bem-sucedido | Screenshot | Parte 1 |
+| 3 | Contagem das 4 tabelas na Sessão A (Writer) | Screenshot | Parte 3 |
+| 4 | Contagem das 4 tabelas na Sessão B (Reader) — idêntica à Evidência 3 | Screenshot | Parte 3 |
+| 5 | Registro `Cliente Teste Replicação` visível no Reader | Screenshot | Parte 3 |
+| 6 | Contagem dos fragmentos horizontais de clientes e pedidos | Screenshot | Parte 4 |
+| 7 | Fragmentos horizontais replicados no Reader | Screenshot | Parte 4 |
+| 8 | Verificação de completude e disjunção | Screenshot | Parte 4 |
+| 9 | Estrutura (`DESCRIBE`) dos 3 fragmentos verticais | Screenshot | Parte 5 |
+| 10 | Reconstrução da tabela original via JOIN | Screenshot | Parte 5 |
+| 11 | Contagem dos fragmentos híbridos | Screenshot | Parte 6 |
+| 12 | Fragmentos temporais com contagens e intervalos de datas | Screenshot | Parte 7 |
+| 13 | Respostas das Questões 8.1 a 8.4 (texto próprio + screenshot da 8.4) | Texto + Screenshot | Parte 8 |
+| 14 | Respostas das Questões 8.5 e 8.6 (texto próprio) | Texto | Parte 8 |
+
+### Orientações Importantes
+
+- **Screenshots** devem mostrar claramente o resultado da consulta e a identificação da sessão (Writer ou Reader).
+- **Respostas textuais** devem ser escritas com suas **próprias palavras** — respostas copiadas literalmente do roteiro ou geradas por IA serão desconsideradas.
+- Certifique-se de que **todas as 14 evidências** estão presentes no documento antes de submeter.
+- Em caso de dúvidas, consulte o professor durante a aula.
