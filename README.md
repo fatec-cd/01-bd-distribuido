@@ -280,7 +280,7 @@ O arquivo **`criar_banco_ecommerce.sql`** contém todos os comandos necessários
    - **30 clientes** (10 por região: Sudeste, Sul, Nordeste)
    - **20 produtos**
    - **60 pedidos** (~20 por região)
-   - **72 itens de pedido**
+   - **85 itens de pedido**
 
 > **Atenção:** Este script deve ser executado **apenas na Sessão A (Writer)**. Operações de escrita enviadas ao endpoint de leitura serão rejeitadas pelo cluster.
 
@@ -306,7 +306,7 @@ UNION ALL
 SELECT 'itens_pedido', COUNT(*) FROM itens_pedido;
 ```
 
-> **Resultado esperado:** 30 clientes, 20 produtos, 60 pedidos, 72 itens.
+> **Resultado esperado:** 30 clientes, 20 produtos, 60 pedidos, 85 itens.
 
 > **📸 Evidência 3:** Tire um *screenshot* do resultado desta consulta na **Sessão A (Writer)**, mostrando a contagem das 4 tabelas.
 
